@@ -1,0 +1,173 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
+using ShipmentAgent.Tools;
+
+namespace ShipmentAgent.Agents;
+
+/// <summary>
+/// Orchestrates a shipment request end-to-end.
+///
+/// The agent (Microsoft Agent Framework / Semantic Kernel) is responsible for
+/// planning the steps and choosing which tools to call. This runner is the
+/// explicit, observable shape of that workflow: it wires the tools, invokes the
+/// kernel, and emits an audit trail of every action taken.
+///
+/// Why explicit and not "let the LLM figure it out":
+/// - The buyer sees the steps. Auditability matters.
+/// - The framework's typed agents can call tools; this runner captures the
+///   intent of the orchestration in code that's easy to read in a code review.
+/// - In a real engagement, the workflow shape is yours; the LLM fills in
+///   reasoning, summarisation, and edge cases.
+/// </summary>
+public sealed class ShipmentAgentRunner
+{
+    private readonly Kernel _kernel;
+    private readonly IErpTool _erp;
+    private readonly IInventoryTool _inventory;
+    private readonly ICarrierTool _carrier;
+    private readonly ICrmTool _crm;
+    private readonly ILogger<ShipmentAgentRunner> _logger;
+
+    public ShipmentAgentRunner(
+        Kernel kernel,
+        IErpTool erp,
+        IInventoryTool inventory,
+        ICarrierTool carrier,
+        ICrmTool crm,
+        ILogger<ShipmentAgentRunner> logger)
+    {
+        _kernel = kernel;
+        _erp = erp;
+        _inventory = inventory;
+        _carrier = carrier;
+        _crm = crm;
+        _logger = logger;
+    }
+
+    public async Task<ShipmentOutcome> RunAsync(
+        ShipmentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var steps = new List<ShipmentStep>();
+        void Record(string name, string outcome) =>
+            steps.Add(new ShipmentStep(name, DateTimeOffset.UtcNow, outcome));
+
+        _logger.LogInformation(
+            "Shipment agent starting: order={Order} email={Email}",
+            request.OrderId, request.CustomerEmail);
+
+        // 1. Look up the order in the ERP.
+        var order = await _erp.FindOrderAsync(request.OrderId, cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Order {request.OrderId} not found in ERP.");
+
+        Record("erp.lookup_order", $"Found order {order.OrderId} for SKU {order.Sku}");
+
+        // 2. Look up the customer in the CRM.
+        var customer = await _crm.FindCustomerByEmailAsync(order.CustomerEmail, cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Customer {order.CustomerEmail} not found in CRM.");
+
+        Record("crm.lookup_customer", $"Resolved customer {customer.CustomerId} ({customer.Name})");
+
+        // 3. Check inventory availability.
+        var inventoryRequest = new InventoryCheckRequest(
+            order.Sku, order.Quantity, order.RequiredBy);
+        var inventoryResult = await _inventory.CheckAsync(inventoryRequest, cancellationToken);
+
+        if (!inventoryResult.Available || inventoryResult.Allocations.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Insufficient inventory for SKU {order.Sku}.");
+        }
+
+        var allocation = inventoryResult.Allocations[0];
+        Record(
+            "inventory.check",
+            $"Reserved {allocation.Quantity} units at {allocation.WarehouseName} (ship by {allocation.ShipByDate})");
+
+        // 4. Quote carriers and pick one.
+        var quoteRequest = new CarrierQuoteRequest(
+            OriginWarehouseId: allocation.WarehouseId,
+            DestinationPostalCode: order.DestinationPostalCode,
+            DestinationCountry: order.DestinationCountry,
+            WeightKg: 5, // demo: real weight from order line item in production
+            VolumeM3: 1,
+            RequiredBy: order.RequiredBy);
+        var quotes = await _carrier.QuoteAsync(quoteRequest, cancellationToken);
+
+        if (quotes.Count == 0)
+        {
+            throw new InvalidOperationException("No carrier quotes returned.");
+        }
+
+        var chosenQuote = quotes[0];
+        Record(
+            "carrier.quote",
+            $"Selected {chosenQuote.CarrierName} ({chosenQuote.Currency} {chosenQuote.Cost})");
+
+        // 5. Book the carrier.
+        var booking = await _carrier.BookAsync(
+            chosenQuote.CarrierId,
+            chosenQuote.CarrierName,
+            allocation.WarehouseId,
+            order.DestinationPostalCode,
+            chosenQuote.EstimatedPickupDate,
+            cancellationToken);
+
+        Record(
+            "carrier.book",
+            $"Booked {booking.CarrierName}: tracking {booking.TrackingReference}, pickup {booking.ConfirmedPickupDate}");
+
+        // 6. Notify the customer.
+        var notificationBody =
+            $"Hi {customer.Name},\n\n" +
+            $"Your order {order.OrderId} is on its way. " +
+            $"Tracking: {booking.TrackingReference}. " +
+            $"Estimated pickup: {booking.ConfirmedPickupDate}. " +
+            $"Estimated delivery: {chosenQuote.EstimatedDeliveryDate}.\n\n" +
+            (string.IsNullOrWhiteSpace(request.Notes) ? "" : $"Notes: {request.Notes}\n");
+
+        var notification = await _crm.NotifyCustomerAsync(
+            customer.CustomerId,
+            $"Shipment confirmation: order {order.OrderId}",
+            notificationBody,
+            cancellationToken);
+
+        Record("crm.notify", $"Notification {notification.NotificationId} sent via {notification.Channel}");
+
+        // 7. Record shipment in ERP.
+        var shipmentId = await _erp.RecordShipmentAsync(
+            order.OrderId,
+            booking.TrackingReference,
+            booking.ConfirmedPickupDate,
+            cancellationToken);
+
+        Record("erp.record_shipment", $"Recorded shipment {shipmentId}");
+
+        // 8. Log event to CRM.
+        var eventDetails = new Dictionary<string, string>
+        {
+            ["orderId"] = order.OrderId,
+            ["shipmentId"] = shipmentId,
+            ["tracking"] = booking.TrackingReference,
+            ["carrier"] = booking.CarrierName,
+            ["pickupDate"] = booking.ConfirmedPickupDate.ToString("o"),
+        };
+        await _crm.LogShipmentEventAsync(
+            customer.CustomerId,
+            "shipment.dispatched",
+            eventDetails,
+            cancellationToken);
+
+        Record("crm.log_event", "Logged shipment.dispatched event");
+
+        return new ShipmentOutcome(
+            OrderId: order.OrderId,
+            ShipmentId: shipmentId,
+            TrackingReference: booking.TrackingReference,
+            ConfirmedPickupDate: booking.ConfirmedPickupDate,
+            EstimatedDeliveryDate: chosenQuote.EstimatedDeliveryDate,
+            Steps: steps);
+    }
+}

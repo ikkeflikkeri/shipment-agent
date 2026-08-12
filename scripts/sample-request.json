@@ -1,0 +1,5 @@
+{
+  "orderId": "ORD-12345",
+  "customerEmail": "buyer@acme.example",
+  "notes": "Please leave at the loading dock."
+}
