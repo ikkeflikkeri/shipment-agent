@@ -168,6 +168,7 @@ public sealed class ShipmentAgentRunner
         return new ShipmentOutcome(
             OrderId: order.OrderId,
             ShipmentId: shipmentId,
+            CarrierName: booking.CarrierName,
             TrackingReference: booking.TrackingReference,
             ConfirmedPickupDate: booking.ConfirmedPickupDate,
             EstimatedDeliveryDate: chosenQuote.EstimatedDeliveryDate,

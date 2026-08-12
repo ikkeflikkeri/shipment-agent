@@ -96,7 +96,7 @@ for i in $(seq 0 $((step_count - 1))); do
     name=$(echo "$OUTCOME_JSON" | jq -r ".steps[$i].name")
     outcome=$(echo "$OUTCOME_JSON" | jq -r ".steps[$i].outcome")
     # Truncate long outcomes so the line fits the canvas.
-    outcome_short=$(printf '%s' "$outcome" | cut -c1-70)
+    outcome_short=$(printf '%s' "$outcome" | cut -c1-78)
     printf '%-22s | %s\n' "$name" "$outcome_short" >> "$STEPS_TXT"
 done
 
@@ -115,17 +115,20 @@ render_scene() {
     local out="$1" duration="$2"
     shift 2
     local filters=""
+    local fontsize="${RENDER_FONTSIZE:-38}"
+    local ystart="${RENDER_YSTART:-120}"
+    local ystep="${RENDER_YSTEP:-58}"
 
     # Background colour source first. Duration is on the source, not the
     # drawtext filters.
     filters="color=c=#0d1117:s=1920x1080:rate=30:d=${duration}"
 
-    local y=120
+    local y=$ystart
     for pair in "$@"; do
         local text="$pair"
         text="$(escape_drawtext "$text")"
-        filters+=",drawtext=fontfile=${FONT}:fontcolor=#e6edf3:fontsize=46:text='${text}':x=160:y=${y}"
-        y=$((y + 70))
+        filters+=",drawtext=fontfile=${FONT}:fontcolor=#e6edf3:fontsize=${fontsize}:text='${text}':x=140:y=${y}"
+        y=$((y + ystep))
     done
 
     ffmpeg -y -loglevel error \
@@ -154,12 +157,13 @@ render_scene "$CLIPS_DIR/02-request.mp4" 3 \
 
 # Scene 3 — eight-step audit trail (3s per step, total ~24s)
 echo "  - 03-steps"
-STEPS_ARGS=()
+STEPS_ARGS=("Eight-step audit trail" "")
 while IFS= read -r line; do
     [[ -z "$line" ]] && STEPS_ARGS+=("") && continue
     STEPS_ARGS+=("$line")
 done < "$STEPS_TXT"
-render_scene "$CLIPS_DIR/03-steps.mp4" 24 "${STEPS_ARGS[@]}"
+RENDER_FONTSIZE=34 RENDER_YSTART=180 RENDER_YSTEP=52 \
+    render_scene "$CLIPS_DIR/03-steps.mp4" 24 "${STEPS_ARGS[@]}"
 
 # Scene 4 — outcome / tracking (4s)
 ORDER_ID=$(echo "$OUTCOME_JSON" | jq -r '.orderId')

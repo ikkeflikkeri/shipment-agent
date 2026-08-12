@@ -15,6 +15,7 @@ public sealed record ShipmentRequest(
 public sealed record ShipmentOutcome(
     string OrderId,
     string ShipmentId,
+    string CarrierName,
     string TrackingReference,
     DateOnly ConfirmedPickupDate,
     DateOnly EstimatedDeliveryDate,
