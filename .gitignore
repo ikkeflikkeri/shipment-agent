@@ -27,3 +27,10 @@ logs/
 # Test output
 TestResults/
 coverage/
+
+# Auto-render intermediates (only the final MP4 ships)
+video/auto/clips/
+video/auto/outcome.json
+video/auto/host.log
+video/auto/build.log
+video/auto/shipment-agent-demo.mp4.tmp

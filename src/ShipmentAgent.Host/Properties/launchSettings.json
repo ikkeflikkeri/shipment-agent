@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "ShipmentAgent.Host": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:19315;http://localhost:19316"
+    }
+  }
+}
