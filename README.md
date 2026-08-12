@@ -4,6 +4,10 @@ A multi-system workflow agent that takes inbound shipment requests, plans the wo
 
 Built as a portfolio demonstration of **production-grade agent systems on Azure**. The agent runs on [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/) with [Semantic Kernel](https://learn.microsoft.com/en-us/semantic-kernel/) underneath, and is designed to be deployed into a buyer's existing .NET / Azure estate with the same auth, observability and security as their other systems.
 
+## Sibling projects
+
+- **[`shipment-agent-platform`](https://github.com/ikkeflikkeri/shipment-agent-platform)** — production-grade deployment of this agent: Aspire App Host, Azure AI Search, Entra ID auth, Bicep via `azd up`, GitHub Actions. The deployment story for the offering.
+
 ## What it does
 
 1. **Receives** a shipment request (email / form / API).
